@@ -314,14 +314,6 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
     const uint64_t time = state.getTimestampSec() * 1e6 +
         state.getTimestampNanoSec() / 1e3;
 
-    if (newState == KUKA::FRI::COMMANDING_ACTIVE) {
-      joint_position_when_command_entered_.resize(kNumJoints, 0.);
-      std::memcpy(joint_position_when_command_entered_.data(),
-                  state.getMeasuredJointPosition(),
-                  kNumJoints * sizeof(double));
-      //lcm_command_.utime = -1;
-    }
-
     std::cerr << "onStateChange ( " << time << "): old " << oldState
               << " new " << newState << std::endl;
 
@@ -334,6 +326,26 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
               << " command " << state.getClientCommandMode()
               << " overlay " << state.getOverlayType()
               << std::endl;
+
+    if (newState == KUKA::FRI::COMMANDING_ACTIVE) {
+      joint_position_when_command_entered_.resize(kNumJoints, 0.);
+      std::memcpy(joint_position_when_command_entered_.data(),
+                  state.getMeasuredJointPosition(),
+                  kNumJoints * sizeof(double));
+      //lcm_command_.utime = -1;
+
+      if (!has_entered_command_state_) {
+        has_entered_command_state_ = true;
+      } else {
+        // We've been in command state before, something bad happened
+        // (we did switch to another state, after all), so just stop
+        // doing anything.
+        inhibit_motion_in_command_state_ = true;
+        std::cerr << "Re-entering command state.  "
+                  << "Holding position and ignoring LCM commands.\n"
+                  << std::endl;
+      }
+    }
   }
 
   virtual void monitor() {
@@ -375,21 +387,26 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
     double pos[kNumJoints] = { 0., 0., 0., 0., 0., 0., 0.};
     const bool command_valid =
         lcm_client_->GetPositionCommand(robot_id_, pos);
-    if (!command_valid) {
+    if (inhibit_motion_in_command_state_ || !command_valid) {
       // No command received, just command the position when we
       // entered command state.
       assert(joint_position_when_command_entered_.size() == kNumJoints);
       memcpy(pos, joint_position_when_command_entered_.data(),
              kNumJoints * sizeof(double));
+    } else {
+      // Only apply the joint limits when we're responding to LCM.  If
+      // we don't want to command motion, don't change anything.
+      ApplyJointLimits(pos);
     }
-    ApplyJointLimits(pos);
     robotCommand().setJointPosition(pos);
 
     // Check if we're in torque mode, and send torque commands too if
     // we are.
     if (robotState().getClientCommandMode() == KUKA::FRI::TORQUE) {
       double torque[kNumJoints] = { 0., 0., 0., 0., 0., 0., 0.};
-      lcm_client_->GetTorqueCommand(robot_id_, torque);
+      if (command_valid && !inhibit_motion_in_command_state_) {
+        lcm_client_->GetTorqueCommand(robot_id_, torque);
+      }
       // TODO(sam.creasey): Is there a sensible torque limit to apply here?
       robotCommand().setTorque(torque);
     }
@@ -410,6 +427,8 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
   // What was the joint position when we entered command state?
   // (provided so that we can keep holding that position).
   std::vector<double> joint_position_when_command_entered_;
+  bool has_entered_command_state_{false};
+  bool inhibit_motion_in_command_state_{false};
 };
 
 int do_main() {
