@@ -1,5 +1,6 @@
 
 #include "poll.h"
+#include "signal.h"
 
 #include <cassert>
 #include <cmath>
@@ -462,6 +463,24 @@ int do_main() {
   fds.back().events = POLLIN;
   fds.back().revents = 0;
 
+  // Set up our RT watchdog.
+  timer_t timerid;
+
+  struct sigevent sev;
+  sev.sigev_notify = SIGEV_SIGNAL;
+  sev.sigev_signo = SIGABRT;
+  sev.sigev_value.sival_ptr = &timerid;
+  if (timer_create(CLOCK_MONOTONIC, &sev, &timerid) == -1) {
+    perror("timer_create");
+    return 1;
+  }
+
+  struct itimerspec its;
+  its.it_value.tv_sec = 0;
+  its.it_value.tv_nsec = 12 * 1000;
+  its.it_interval.tv_sec = 0;
+  its.it_interval.tv_nsec = 0;
+
   bool success = true;
   while (success) {
     int result = poll(fds.data(), fds.size(), -1);
@@ -490,6 +509,11 @@ int do_main() {
     }
     if (!success) { break; }
     if (robot_stepped) {
+      if (timer_settime(timerid, 0, &its, NULL) == -1) {
+        perror("timer_settime");
+        return 1;
+      }
+
       lcm_client.PublishStateUpdate();
     }
   }

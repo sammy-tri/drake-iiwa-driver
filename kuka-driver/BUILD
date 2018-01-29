@@ -14,4 +14,5 @@ cc_binary(
         "@kuka_fri//:kuka-fri-lib",
         "@lcm//:lcm",
     ],
+    linkopts = ["-lrt"],
 )
