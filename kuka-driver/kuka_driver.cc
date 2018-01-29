@@ -413,6 +413,8 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
     }
   }
 
+  bool has_entered_command_state_{false};
+
  private:
   void ApplyJointLimits(double* pos) const {
     const double joint_tol = ToRadians(kJointLimitSafetyMarginDegree);
@@ -428,7 +430,6 @@ class KukaFRIClient : public KUKA::FRI::LBRClient {
   // What was the joint position when we entered command state?
   // (provided so that we can keep holding that position).
   std::vector<double> joint_position_when_command_entered_;
-  bool has_entered_command_state_{false};
   bool inhibit_motion_in_command_state_{false};
 };
 
@@ -509,9 +510,11 @@ int do_main() {
     }
     if (!success) { break; }
     if (robot_stepped) {
-      if (timer_settime(timerid, 0, &its, NULL) == -1) {
-        perror("timer_settime");
-        return 1;
+      if (clients[0].has_entered_command_state_) {
+        if (timer_settime(timerid, 0, &its, NULL) == -1) {
+          perror("timer_settime");
+          return 1;
+        }
       }
 
       lcm_client.PublishStateUpdate();
