@@ -1,7 +1,9 @@
 #include <poll.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <time.h>
 
 #include <cassert>
 #include <cmath>
@@ -53,6 +55,12 @@ void PrintVector(const std::vector<double>& array, int start, int length,
     else
       out << "\n";
   }
+}
+
+void HandleWatchdogTimer(int sig, siginfo_t* si, void*) {
+  const int robot_num = si->si_value.sival_int;
+  std::cerr << "RT watchdog fired for robot " << robot_num << std::endl;
+  abort();
 }
 
 }  // namespace
@@ -136,7 +144,34 @@ class KukaLCMClient  {
     const double cutoff_hz = 40;
     vel_filters_.resize(
         num_joints_, DiscreteTimeLowPassFilter<double>(cutoff_hz, kTimeStep));
+
+    // Setup watchdogs.
     utime_last_.resize(num_robots, -1);
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = HandleWatchdogTimer;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGRTMIN, &sa, NULL) == -1) {
+      perror("sigaction");
+      throw std::runtime_error("Unable to register watchdog handler.");
+    }
+
+    struct sigevent sev;
+    memset(&sev, 0, sizeof(sev));
+    sev.sigev_notify = SIGEV_SIGNAL;
+    sev.sigev_signo = SIGRTMIN;
+
+    for (int i = 0; i < num_robots; i++) {
+      sev.sigev_value.sival_int = i;
+      timer_t timerid;
+      if (timer_create(CLOCK_MONOTONIC, &sev, &timerid) == -1) {
+        perror("timer_create");
+        throw std::runtime_error("Unable to create watchdog timer.");
+      }
+      watchdog_timers_.push_back(timerid);
+    }
 
     lcm::Subscription* sub = lcm_.subscribe(FLAGS_lcm_command_channel,
         &KukaLCMClient::HandleCommandMessage, this);
@@ -162,6 +197,16 @@ class KukaLCMClient  {
       }
     }
     utime_last_.at(robot_id) = utime_now;
+
+    // Pet the watchdog for this robot.
+    struct itimerspec its;
+    memset(&its, 0, sizeof(its));
+    its.it_value.tv_nsec = static_cast<long>(kTimeStep * 1e9) * 2;
+    if (timer_settime(watchdog_timers_.at(robot_id), 0, &its, NULL) == -1) {
+      perror("timer_settime");
+      throw std::runtime_error("Unable to set watchdog timer");
+    }
+
 
     // The choice of robot id 0 for the timestamp is arbitrary.
     if (robot_id == 0) {
@@ -330,7 +375,10 @@ class KukaLCMClient  {
 
   // Filters
   std::vector<DiscreteTimeLowPassFilter<double>> vel_filters_;
+
+  // Monitoring information for robot state updates.
   std::vector<int64_t> utime_last_;
+  std::vector<timer_t> watchdog_timers_;
 };
 
 class KukaFRIClient : public KUKA::FRI::LBRClient {

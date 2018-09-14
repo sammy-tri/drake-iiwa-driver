@@ -8,6 +8,7 @@ cc_binary(
         "kuka_driver.cc",
         "low_pass_filter.h"
     ],
+    linkopts = ["-lrt"],
     deps = [
         "@drake//lcmtypes:iiwa",
         "@gflags//:gflags",
