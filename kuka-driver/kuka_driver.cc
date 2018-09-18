@@ -207,7 +207,6 @@ class KukaLCMClient  {
       throw std::runtime_error("Unable to set watchdog timer");
     }
 
-
     // The choice of robot id 0 for the timestamp is arbitrary.
     if (robot_id == 0) {
       lcm_status_.utime = utime_now;
@@ -579,9 +578,18 @@ int do_main() {
     apps.emplace_back(connections[i], clients[i]);
     apps[i].connect(FLAGS_fri_port + i, NULL);
 
-    fds[i].fd = connections[i].udpSock();
+    const int robot_socket = connections[i].udpSock();
+    fds[i].fd = robot_socket;
     fds[i].events = POLLIN;
     fds[i].revents = 0;
+
+    const int busy_poll_duration = 10000;
+    if (setsockopt(robot_socket, SOL_SOCKET, SO_BUSY_POLL,
+                   &busy_poll_duration, sizeof(busy_poll_duration)) == -1) {
+      perror("setsockopt SO_BUSY_POLL");
+      throw std::runtime_error("Unable to set SO_BUSY_POLL");
+    }
+
     std::cerr << "Listening for robot " << i
               << " port " << FLAGS_fri_port + i
               << std::endl;
