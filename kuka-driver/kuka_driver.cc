@@ -583,13 +583,14 @@ int do_main() {
     fds[i].events = POLLIN;
     fds[i].revents = 0;
 
+    /*
     const int busy_poll_duration = 10000;
     if (setsockopt(robot_socket, SOL_SOCKET, SO_BUSY_POLL,
                    &busy_poll_duration, sizeof(busy_poll_duration)) == -1) {
       perror("setsockopt SO_BUSY_POLL");
       throw std::runtime_error("Unable to set SO_BUSY_POLL");
     }
-
+    */
     std::cerr << "Listening for robot " << i
               << " port " << FLAGS_fri_port + i
               << std::endl;
@@ -600,7 +601,8 @@ int do_main() {
 
   bool success = true;
   while (success) {
-    int result = poll(fds.data(), fds.size(), -1);
+    //    int result = poll(fds.data(), fds.size(), -1);
+    int result = poll(fds.data(), fds.size(), 0);
     if (result < 0) {
       perror("poll failed");
       break;
